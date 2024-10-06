@@ -8,7 +8,7 @@ import numpy as np
 
 from src.loftr import LoFTR, full_default_cfg, opt_default_cfg, reparameter
 
-from utils import get_paths, check_matches
+from utils import get_paths, read_image_gray, check_matches
 
 # You can also change the default values like thr. and npe (based on input image size)
 
@@ -50,9 +50,9 @@ def match():
 
     for i, qpath in enumerate(query_path):
         
-        q_img, q_mask, _ = read_megadepth_gray(qpath, resize=img_size, padding=True)
+        q_img, q_mask, _ = read_image_gray(qpath, resize=img_size, padding=True)
         query_batch = q_img.expand(batch_size, 1, q_img.shape[1], q_img.shape[2]).cuda()
-        #q_mask_batch = q_mask.expand(batch_size, img_size, img_size).cuda()
+        query_mask = np.array(q_mask)
         t = 0
         score = torch.zeros(len(ref_path))
         while t < ref_iter:
@@ -60,7 +60,7 @@ def match():
             if t == ref_iter-1:
                 ref_batch_paths = ref_path[t*batch_size:]
                 query_batch = query_batch[:len(ref_batch_paths)]
-                #q_mask_batch = q_mask_batch[:len(ref_batch_paths)]
+                
             else:
                 ref_batch_paths = ref_path[t*batch_size:(t+1)*batch_size]
             
@@ -70,9 +70,9 @@ def match():
             for rpath in ref_batch_paths:
                 r_img, r_mask, _ = read_megadepth_gray(rpath, resize=img_size, padding=True)
                 ref_batch.append(r_img)
-                #ref_mask_batch.append(r_mask)
+                ref_mask_batch.append(r_mask)
             ref_batch = torch.stack(ref_batch, dim=0).cuda()
-            ref_mask_batch = torch.stack(ref_mask_batch, dim=0).cuda()
+            ref_mask_batch = np.array(ref_mask_batch)
 
             batch = {'image0': query_batch, 'image1': ref_batch}#, 'mask0': q_mask_batch, 'mask1': ref_mask_batch}
 
@@ -84,10 +84,9 @@ def match():
                     matcher(batch)
                 #mkpts0 = batch['mkpts0_f'].cpu().numpy()
                 #mconf = batch['mconf'].cpu().numpy()
-                count = torch.bincount(batch['b_ids'])
+                counts = check_matches(batch['mkpts0_f'], batch['mkpts1_f'], query_mask, ref_mask_batch, batch['b_ids'], len(query_batch))
 
-            #counts = torch.bincount(mkpts0)
-            score[t*batch_size:t*batch_size+len(count)] = count
+            score[t*batch_size:t*batch_size+len(counts)] = counts
             t += 1
         print(f'Calc top {topk}')
         _, max_arg = torch.topk(score, topk, largest=True)
