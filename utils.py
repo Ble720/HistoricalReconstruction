@@ -17,16 +17,22 @@ def read_image_gray(path, resize):
     h, w = image.shape
     scale = resize / max(h,w)
     hnew, wnew = int(h*scale), int(w*scale)
-    image = cv2.resize(image, (hnew, wnew))
+    image = cv2.resize(image, (wnew, hnew))
     padded_image = torch.zeros((resize, resize))
-    padded_image[:hnew, :wnew] = image
-    return padded_image, [hnew, wnew]
+    padded_image[:hnew, :wnew] = torch.from_numpy(image).float()
+    padded_image = padded_image[None] / 255
+    return padded_image, torch.tensor([hnew, wnew])
 
 def check_matches(mkpts0, mkpts1, mask0, mask1, b_ids, batch_size):
+    #remove points in padding within query image 
     keep = torch.le(mkpts0, mask0)
     keep = keep[:, 0] * keep[:, 1]
-    new_b_ids = b_ids[keep]
-    keep = torch.le(mkpts1[keep, :], mask1[new_b_ids, :])
+    keep_indexes = torch.nonzero(keep).flatten()
+    new_b_ids = b_ids[keep_indexes]
+    
+    #remove points in padding within reference images
+    keep = torch.le(mkpts1[keep_indexes, :], mask1[new_b_ids, :])
     keep = keep[:, 0] * keep[:, 1]
-    new_b_ids = new_b_ids[keep]
+    keep_indexes = torch.nonzero(keep).flatten()
+    new_b_ids = new_b_ids[keep_indexes]
     return torch.bincount(new_b_ids, minlength=batch_size)

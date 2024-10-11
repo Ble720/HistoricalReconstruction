@@ -1,6 +1,5 @@
 import os
 from copy import deepcopy
-from src.utils.dataset import read_megadepth_gray
 import shutil
 
 import torch
@@ -9,16 +8,22 @@ import numpy as np
 from src.loftr import LoFTR, full_default_cfg, opt_default_cfg, reparameter
 
 from utils import get_paths, read_image_gray, check_matches
+import csv
+import argparse
 
 # You can also change the default values like thr. and npe (based on input image size)
 
 def match():
     model_type = 'full' #['full', 'opt']
     precision = 'fp32' #['fp32', 'mp', 'fp16']
-    batch_size = 64
+    batch_size = 1
     img_size = 256
-    topk = 15
-    save = './save_eloftr_raw'
+    topk = 100
+    save = './save_eloftr_x4_topk100'
+
+    if not os.path.exists(save):
+        os.makedirs(save)
+
 
     if model_type == 'full':
         _default_cfg = deepcopy(full_default_cfg)
@@ -40,7 +45,7 @@ def match():
 
     matcher = matcher.eval().cuda()
 
-    query_path = get_paths('../image-matching-toolbox/src_100')
+    query_path = get_paths('./query_img100')
     ref_path = get_paths('../image-matching-toolbox/target')
 
     ref_iter = len(ref_path)/batch_size
@@ -50,9 +55,9 @@ def match():
 
     for i, qpath in enumerate(query_path):
         
-        q_img, q_mask, _ = read_image_gray(qpath, resize=img_size, padding=True)
+        q_img, q_mask = read_image_gray(qpath, img_size)
         query_batch = q_img.expand(batch_size, 1, q_img.shape[1], q_img.shape[2]).cuda()
-        query_mask = np.array(q_mask)
+        query_mask = q_mask.cuda()
         t = 0
         score = torch.zeros(len(ref_path))
         while t < ref_iter:
@@ -68,11 +73,11 @@ def match():
             ref_mask_batch = []
 
             for rpath in ref_batch_paths:
-                r_img, r_mask, _ = read_megadepth_gray(rpath, resize=img_size, padding=True)
+                r_img, r_mask = read_image_gray(rpath, img_size)
                 ref_batch.append(r_img)
                 ref_mask_batch.append(r_mask)
             ref_batch = torch.stack(ref_batch, dim=0).cuda()
-            ref_mask_batch = np.array(ref_mask_batch)
+            ref_mask_batch = torch.stack(ref_mask_batch, dim=0).cuda()
 
             batch = {'image0': query_batch, 'image1': ref_batch}#, 'mask0': q_mask_batch, 'mask1': ref_mask_batch}
 
@@ -88,8 +93,10 @@ def match():
 
             score[t*batch_size:t*batch_size+len(counts)] = counts
             t += 1
+    
         print(f'Calc top {topk}')
-        _, max_arg = torch.topk(score, topk, largest=True)
+        max, max_arg = torch.topk(score, topk, largest=True)
+        
 
         si_name = query_path[i].replace('\\', '/').split('/')[-1]
 
@@ -98,9 +105,15 @@ def match():
             os.makedirs(dir_name)
         shutil.copyfile(query_path[i], '{}/{}/SRC_{}'.format(save, si_name[:-4], si_name))
 
-        for ip in max_arg:
-            ti_name = ref_path[ip.item()].replace('\\', '/').split('/')[-1]
-            shutil.copyfile(ref_path[ip.item()], '{}/{}/{}'.format(save, si_name[:-4], ti_name))
+
+        with open(f'{save}/{si_name[:-4]}.csv', 'a', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+
+            for k, ip in enumerate(max_arg):
+                ti_name = ref_path[ip.item()].replace('\\', '/').split('/')[-1]
+                shutil.copyfile(ref_path[ip.item()], '{}/{}/{}'.format(save, si_name[:-4], ti_name))
+                writer.writerow([int(max[k].item()), ti_name])
+
         print(f"source {i+1}/{len(query_path)} done\n")
             
 # if precision == 'fp16':
@@ -112,6 +125,20 @@ def match():
 
 
 # Inference with EfficientLoFTR and get prediction
+def parse_opt():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--topk', type=int, default=15, help='find topk matches')
+    parser.add_argument('--batch-size', type=int, default=16, help='batch size')
+    parser.add_argument('--img-size', type=int, default=256, help='Size of image (single number - same width and height)')
+    parser.add_argument('--query-path', type=str, default='.', help='relative path to query images')
+    parser.add_argument('--reference-path', type=int, default='.', help='relative path to reference images')
+    parser.add_argument('--erase', type=bool, default=False, help='Activate Erase Functions')
+    opt = parser.parse_args()
+    return opt
+
+
+def run():
+    pass
 
 if __name__ == '__main__':
     match()
